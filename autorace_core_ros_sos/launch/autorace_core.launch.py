@@ -30,7 +30,7 @@ def generate_launch_description():
     )
 
     delayed_motion_controller = TimerAction(
-        period=2.0,
+        period=1.0,
         actions=[motion_controller]
     )
 
@@ -41,7 +41,7 @@ def generate_launch_description():
                               description="I coefficient in PID"),
         DeclareLaunchArgument("kd", default_value="0.0",
                               description="D coefficient in PID"),
-        DeclareLaunchArgument("error_limit", default_value="1.5",
+        DeclareLaunchArgument("error_limit", default_value="5.0",
                               description="Error limit for PID regularization"),
         road_vision_node,
         delayed_motion_controller
