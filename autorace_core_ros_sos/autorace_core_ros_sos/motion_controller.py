@@ -5,6 +5,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, Int32
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Imu
+import tf_transformations
 
 
 class PID:
@@ -39,6 +41,7 @@ STOP = 0
 STRAIGHT = 1
 TURN_RIGHT = 2
 TURN_LEFT = 3
+INTERSECTION = 4
 
 
 class MotionController(Node):
@@ -50,15 +53,27 @@ class MotionController(Node):
         self.active_state = STOP
         self.last_state_change = time.time()
 
+        # Yaw
+        self.current_yaw = None
+        self.yaw_threshold = self.declare_parameter("yaw_threshold", 5.0).value
+        self.yaw_threshold = self.yaw_threshold * (pi / 180.0)
+
         # Error from vision
         self.road_error = 0.0
 
         # PID
-        self.pid = PID(
-            kp=self.declare_parameter("kp", 1.0).value,
-            ki=self.declare_parameter("ki", 0.0).value,
-            kd=self.declare_parameter("kd", 0.001).value,
-            output_limit=self.declare_parameter("error_limit", 1.5).value
+        self.center_pid = PID(
+            kp=self.declare_parameter("c_p", 3.0).value,
+            ki=self.declare_parameter("c_i", 0.0).value,
+            kd=self.declare_parameter("c_d", 0.0).value,
+            output_limit=self.declare_parameter("c_error_limit", 5.0).value
+        )
+
+        self.turn_pid = PID(
+            kp=self.declare_parameter("t_p", 0.8).value,
+            ki=self.declare_parameter("t_i", 0.0).value,
+            kd=self.declare_parameter("t_d", 0.0).value,
+            output_limit=self.declare_parameter("t_error_limit", 3.14).value
         )
 
         self.last_time = self.get_clock().now()
@@ -78,6 +93,13 @@ class MotionController(Node):
             10
         )
 
+        self.create_subscription(
+            Imu,
+            "/imu",
+            self.imu_callback,
+            10
+        )
+
         self.fsm_state_pub = self.create_publisher(
             Int32,
             "/fsm_state",
@@ -94,11 +116,25 @@ class MotionController(Node):
 
         self.get_logger().info("Motion controller started")
 
+    @staticmethod
+    def normalize_angle(alpha):
+        while alpha > pi:
+            alpha -= 2*pi
+        while alpha < -pi:
+            alpha += 2*pi
+        return alpha
+
     def error_callback(self, msg):
         self.road_error = msg.data
 
     def state_callback(self, msg):
         self.cur_state = msg.data
+
+    def imu_callback(self, msg):
+        q = msg.orientation
+        quat = [q.x, q.y, q.z, q.w]
+        _, _, yaw = tf_transformations.euler_from_quaternion(quat)
+        self.current_yaw = yaw
 
     def control_loop(self):
         if self.active_state == STOP and (self.cur_state == STOP):
@@ -113,27 +149,28 @@ class MotionController(Node):
         cmd = Twist()
 
         # -------- FSM --------
-        if self.active_state == STRAIGHT:
-            cmd.linear.x = 0.2
+        if self.active_state in [STRAIGHT, INTERSECTION]:
+            cmd.linear.x = 0.2 if self.active_state == STRAIGHT else 0.15
             if self.cur_state in [TURN_RIGHT, TURN_LEFT]:
-                self.pid.reset()
+                self.center_pid.reset()
                 self.active_state = self.cur_state
+                self.target_yaw = 150.0 * (pi / 180.0)
+                self.target_yaw = self.target_yaw if self.active_state == TURN_RIGHT else -self.target_yaw
+                self.intersection_side = self.active_state
             else:
-                angular = self.pid.compute(self.road_error, dt)
+                angular = self.center_pid.compute(self.road_error, dt)
                 cmd.angular.z = -angular
                 self.cmd_pub.publish(cmd)
         elif self.active_state in [TURN_RIGHT, TURN_LEFT]:
-            cmd.linear.x = 0.05
-            cmd.angular.z = 4*pi if self.active_state == TURN_LEFT else -4*pi
-
+            yaw_error = self.normalize_angle(self.target_yaw - self.current_yaw)
+            if abs(yaw_error) <= self.yaw_threshold:
+                fsm_state = Int32()
+                fsm_state.data = 4
+                self.fsm_state_pub.publish(fsm_state)
+                self.cur_state = self.active_state = INTERSECTION
+            cmd.linear.x = 0.0
+            cmd.angular.z = self.turn_pid.compute(yaw_error, dt)
             self.cmd_pub.publish(cmd)
-            rclpy.spin_once(self, timeout_sec=5.0)
-
-            fsm_state = Int32()
-            fsm_state.data = 1
-            self.active_state = self.cur_state = STRAIGHT
-            self.fsm_state_pub.publish(fsm_state)
-            self.get_logger().info("Completed turning")
 
 
 def main(args=None):

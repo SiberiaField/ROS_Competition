@@ -13,6 +13,7 @@ STOP = 0
 STRAIGHT = 1
 TURN_RIGHT = 2
 TURN_LEFT = 3
+INTERSECTION = 4
 
 
 class RoadVisionNode(Node):
@@ -22,9 +23,12 @@ class RoadVisionNode(Node):
         self.bridge = CvBridge()
 
         self.state = STOP
-        self.turn_direction = self.declare_parameter(
-            "turn_direction", "right"
-        ).value
+
+        self.intersection_side = None
+
+        self.max_depth = self.declare_parameter("max_depth", 0.7).value
+
+        self.side_k = self.declare_parameter("side_k", 1.4).value
 
         self.create_subscription(
             Image,
@@ -59,6 +63,12 @@ class RoadVisionNode(Node):
             1
         )
 
+        self.debug_image_pub = self.create_publisher(
+            Image,
+            "/vision/debug_mask",
+            1
+        )
+
         self.get_logger().info(
             "Vision node started"
         )
@@ -80,6 +90,7 @@ class RoadVisionNode(Node):
         if self.state == STOP or self.depth_frame is None:
             return
         elif self.state in [TURN_RIGHT, TURN_LEFT]:
+            self.intersection_side = self.state
             return
 
         frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -93,43 +104,49 @@ class RoadVisionNode(Node):
         # --- Цветовые маски ---
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        white_mask = cv2.inRange(
+        gray_mask = cv2.inRange(
             hsv,
-            np.array([0, 0, 200]),
-            np.array([180, 30, 255])
-        )
-
-        yellow_mask = cv2.inRange(
-            hsv,
-            np.array([15, 80, 80]),
-            np.array([35, 255, 255])
+            np.array([0, 0, 90]),
+            np.array([180, 60, 110])
         )
 
         kernel = np.ones((5, 5), np.uint8)
-        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
-        yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_CLOSE, kernel)
+        gray_mask = cv2.morphologyEx(gray_mask, cv2.MORPH_CLOSE, kernel)
+        gray_mask = cv2.morphologyEx(gray_mask, cv2.MORPH_OPEN, kernel)
 
         # ---------- Depth → weight ----------
-        max_depth = 5.0 # метры
+        cur_max_depth = self.max_depth if self.state == STRAIGHT else self.max_depth * 0.7
         depth = depth_roi.copy()
-        depth[depth == 0.0] = max_depth
+        depth[depth == 0.0] = cur_max_depth
 
         depth = cv2.medianBlur(depth, 5)
 
-        depth_norm = np.clip(depth / max_depth, 0.0, 1.0)
-        weight = 1.0 - depth_norm   # ближе = больше вес
+        depth_norm = np.clip(depth / cur_max_depth, 0.0, 1.0)
+        weight = 1.0 - depth_norm
 
+        if self.state == INTERSECTION:
+            # ---------- X-priority weight ----------
+            roi_h, roi_w = weight.shape
+            xs = np.linspace(-1.0, 1.0, roi_w)
+
+            if self.intersection_side == TURN_LEFT:
+                x_weight_1d = np.clip(1.0 - (xs + 1.0) / 2.0, 0.0, 1.0)
+            elif self.intersection_side == TURN_RIGHT:
+                x_weight_1d = np.clip((xs + 1.0) / 2.0, 0.0, 1.0)
+            
+            x_weight_1d = x_weight_1d * self.side_k
+
+            # ---------- Combined weight ----------
+            x_weight = np.tile(x_weight_1d, (roi_h, 1))
+            weight *= x_weight
+
+        # ---------- Road error ----------
         image_center_x = w / 2.0
 
-        cx_white = self.weighted_centroid_x(white_mask, weight)
-        cx_yellow = self.weighted_centroid_x(yellow_mask, weight)
+        cx_gray = self.weighted_centroid_x(gray_mask, weight)
 
-        if cx_white is not None and cx_yellow is not None:
-            road_center = (cx_white + cx_yellow) / 2.0
-        elif cx_white is not None:
-            road_center = cx_white
-        elif cx_yellow is not None:
-            road_center = cx_yellow
+        if cx_gray is not None:
+            road_center = cx_gray
         else:
             road_center = image_center_x
 
@@ -138,6 +155,19 @@ class RoadVisionNode(Node):
         out = Float32()
         out.data = float(road_error)
         self.pub.publish(out)
+
+        # ---------- DEBUG MASK ----------
+        weight_img = (weight * 255).astype(np.uint8)
+        final_mask = cv2.bitwise_and(gray_mask, weight_img)
+
+        debug_full = np.zeros((h, w), dtype=np.uint8)
+        debug_full[y0:h, :] = final_mask
+
+        debug_bgr = cv2.cvtColor(debug_full, cv2.COLOR_GRAY2BGR)
+
+        debug_msg = self.bridge.cv2_to_imgmsg(debug_bgr, encoding="bgr8")
+        debug_msg.header = msg.header
+        self.debug_image_pub.publish(debug_msg)
 
     # ---------- helpers ----------
 

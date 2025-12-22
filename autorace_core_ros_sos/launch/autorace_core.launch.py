@@ -6,25 +6,33 @@ from launch.actions import TimerAction
 
 
 def generate_launch_description():
+    pkg_name = "autorace_core_ros_sos"
+
     road_vision_node = Node(
-        package="autorace_core_ros_sos",
+        package=pkg_name,
         executable="road_vision_node",
         name="road_vision_node",
-        parameters=[
-            {"turn_direction": "right"}
-        ]
+        parameters=[{
+            "max_depth": LaunchConfiguration("max_depth"),
+            "side_k": LaunchConfiguration("side_k")
+        }]
     )
 
     motion_controller = Node(
-        package="autorace_core_ros_sos",
+        package=pkg_name,
         executable="motion_controller",
         name="motion_controller",
         parameters=[
             {
-                "kp": LaunchConfiguration("kp"),
-                "ki": LaunchConfiguration("ki"),
-                "kd": LaunchConfiguration("kd"),
-                "error_limit": LaunchConfiguration("error_limit")
+                "c_p": LaunchConfiguration("c_p"),
+                "c_i": LaunchConfiguration("c_i"),
+                "c_d": LaunchConfiguration("c_d"),
+                "c_error_limit": LaunchConfiguration("c_error_limit"),
+                "t_p": LaunchConfiguration("t_p"),
+                "t_i": LaunchConfiguration("t_i"),
+                "t_d": LaunchConfiguration("t_d"),
+                "t_error_limit": LaunchConfiguration("t_error_limit"),
+                "yaw_threshold": LaunchConfiguration("yaw_threshold")
             }
         ]
     )
@@ -34,15 +42,46 @@ def generate_launch_description():
         actions=[motion_controller]
     )
 
+    traffic_light_node = Node(
+        package=pkg_name,
+        executable="traffic_light_node",
+        name="traffic_light_node",
+        parameters=[{
+            "green_threshold": LaunchConfiguration("green_threshold")
+        }]
+    )
+
+    delayed_traffic_light_node = TimerAction(
+        period=1.0,
+        actions=[traffic_light_node]
+    )
+
     return LaunchDescription([
-        DeclareLaunchArgument("kp", default_value="2.5",
-                              description="P coefficient in PID"),
-        DeclareLaunchArgument("ki", default_value="0.0",
-                              description="I coefficient in PID"),
-        DeclareLaunchArgument("kd", default_value="0.0",
-                              description="D coefficient in PID"),
-        DeclareLaunchArgument("error_limit", default_value="5.0",
-                              description="Error limit for PID regularization"),
+        DeclareLaunchArgument("c_p", default_value="2.0",
+                              description="P coefficient in center PID"),
+        DeclareLaunchArgument("c_i", default_value="0.0",
+                              description="I coefficient in center PID"),
+        DeclareLaunchArgument("c_d", default_value="0.05",
+                              description="D coefficient in center PID"),
+        DeclareLaunchArgument("c_error_limit", default_value="5.0",
+                              description="Error limit for center PID regularization"),
+        DeclareLaunchArgument("t_p", default_value="0.8",
+                              description="P coefficient in turn PID"),
+        DeclareLaunchArgument("t_i", default_value="0.0",
+                              description="I coefficient in turn PID"),
+        DeclareLaunchArgument("t_d", default_value="0.0",
+                              description="D coefficient in turn PID"),
+        DeclareLaunchArgument("t_error_limit", default_value="3.14",
+                              description="Error limit for turn PID regularization"),
+        DeclareLaunchArgument("yaw_threshold", default_value="5.0",
+                              description="Yaw threshold in degrees for turning task"),
+        DeclareLaunchArgument("max_depth", default_value="0.7",
+                              description="Max depth fpr depth camera"),
+        DeclareLaunchArgument("side_k", default_value="1.4",
+                              description="Coef for x-priority"),
+        DeclareLaunchArgument("green_threshold", default_value="500",
+                              description="Num of pixels for green light detection"),
         road_vision_node,
-        delayed_motion_controller
+        delayed_motion_controller,
+        delayed_traffic_light_node
     ])
