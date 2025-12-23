@@ -29,7 +29,9 @@ setup(
         'console_scripts': [
             'road_vision_node = autorace_core_ros_sos.road_vision_node:main',
             'motion_controller = autorace_core_ros_sos.motion_controller:main',
-            'traffic_light_node = autorace_core_ros_sos.traffic_light_node:main'
+            'traffic_light_node = autorace_core_ros_sos.traffic_light_node:main',
+            'intersection_detector = autorace_core_ros_sos.intersection_detector:main',
+            'distance_node = autorace_core_ros_sos.distance_node:main'
         ],
     },
 )

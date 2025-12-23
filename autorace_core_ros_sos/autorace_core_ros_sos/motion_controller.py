@@ -49,8 +49,8 @@ class MotionController(Node):
         super().__init__("motion_controller")
 
         # FSM
-        self.cur_state = STOP
         self.active_state = STOP
+        self.cur_state = STOP
         self.last_state_change = time.time()
 
         # Yaw
@@ -128,7 +128,10 @@ class MotionController(Node):
         self.road_error = msg.data
 
     def state_callback(self, msg):
-        self.cur_state = msg.data
+        if msg.data in [TURN_LEFT, TURN_RIGHT]:
+            self.cur_state = msg.data
+        else:
+            self.active_state = msg.data
 
     def imu_callback(self, msg):
         q = msg.orientation
@@ -137,10 +140,10 @@ class MotionController(Node):
         self.current_yaw = yaw
 
     def control_loop(self):
-        if self.active_state == STOP and (self.cur_state == STOP):
-            return
-        elif self.active_state == STOP and (self.cur_state != STOP):
-            self.active_state = self.cur_state
+        # if self.active_state == STOP and (self.cur_state == STOP):
+        #     return
+        # elif self.active_state == STOP and (self.cur_state != STOP):
+        #     self.active_state = self.cur_state
 
         now = self.get_clock().now()
         dt = (now - self.last_time).nanoseconds * 1e-9
@@ -149,7 +152,11 @@ class MotionController(Node):
         cmd = Twist()
 
         # -------- FSM --------
-        if self.active_state in [STRAIGHT, INTERSECTION]:
+        if self.active_state == STOP:
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            self.cmd_pub.publish(cmd)
+        elif self.active_state in [STRAIGHT, INTERSECTION]:
             cmd.linear.x = 0.2 if self.active_state == STRAIGHT else 0.15
             if self.cur_state in [TURN_RIGHT, TURN_LEFT]:
                 self.center_pid.reset()

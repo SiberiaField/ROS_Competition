@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32, Int32
+from std_msgs.msg import Float32, Int32, String
 
 from cv_bridge import CvBridge
 import cv2
@@ -14,6 +14,7 @@ STRAIGHT = 1
 TURN_RIGHT = 2
 TURN_LEFT = 3
 INTERSECTION = 4
+EXIT = 5
 
 
 class RoadVisionNode(Node):
@@ -24,7 +25,14 @@ class RoadVisionNode(Node):
 
         self.state = STOP
 
+        self.team_name = "autorace_core_ros_sos"
+
+        self.exit_delay = 10.0
+
         self.intersection_side = None
+
+        self.back_dist = None
+        self.dist_threshold = self.declare_parameter("back_dist_threshold", 2.0).value
 
         self.max_depth = self.declare_parameter("max_depth", 0.7).value
 
@@ -51,6 +59,13 @@ class RoadVisionNode(Node):
             10
         )
 
+        self.create_subscription(
+            Float32,
+            "/lidar/back_distance",
+            self.back_dist_callback,
+            10
+        )
+
         self.motion_fsm_state_pub = self.create_publisher(
             Int32,
             "/motion_fsm_state",
@@ -69,9 +84,18 @@ class RoadVisionNode(Node):
             1
         )
 
+        self.finish_pub = self.create_publisher(
+            String,
+            "/robot_finish",
+            1
+        )
+
         self.get_logger().info(
             "Vision node started"
         )
+
+    def back_dist_callback(self, msg):
+        self.back_dist = msg.data
 
     def state_callback(self, msg):
         self.state = msg.data
@@ -92,6 +116,18 @@ class RoadVisionNode(Node):
         elif self.state in [TURN_RIGHT, TURN_LEFT]:
             self.intersection_side = self.state
             return
+        elif self.state == EXIT:
+            if ((self.get_clock().now().nanoseconds * 1e9) - self.exit_start) > self.exit_delay:
+                self.state = STOP
+                fsm_state = Int32()
+                fsm_state.data = STOP
+                self.motion_fsm_state_pub.publish(fsm_state)
+                rclpy.spin_once(self, timeout_sec=4.0)
+                finish_msg = String()
+                finish_msg.data = self.team_name
+                self.finish_pub.publish(finish_msg)
+                rclpy.spin_once(self, timeout_sec=2.0)
+                rclpy.shutdown()
 
         frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         h, w, _ = frame.shape
@@ -125,6 +161,13 @@ class RoadVisionNode(Node):
         weight = 1.0 - depth_norm
 
         if self.state == INTERSECTION:
+            if self.back_dist > self.dist_threshold:
+                self.exit_start = self.get_clock().now().nanoseconds * 1e9
+                self.state = EXIT
+                fsm_state = Int32()
+                fsm_state.data = STRAIGHT
+                self.motion_fsm_state_pub.publish(fsm_state)
+                return
             # ---------- X-priority weight ----------
             roi_h, roi_w = weight.shape
             xs = np.linspace(-1.0, 1.0, roi_w)
@@ -133,7 +176,7 @@ class RoadVisionNode(Node):
                 x_weight_1d = np.clip(1.0 - (xs + 1.0) / 2.0, 0.0, 1.0)
             elif self.intersection_side == TURN_RIGHT:
                 x_weight_1d = np.clip((xs + 1.0) / 2.0, 0.0, 1.0)
-            
+
             x_weight_1d = x_weight_1d * self.side_k
 
             # ---------- Combined weight ----------

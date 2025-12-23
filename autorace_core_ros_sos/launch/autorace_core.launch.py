@@ -14,7 +14,8 @@ def generate_launch_description():
         name="road_vision_node",
         parameters=[{
             "max_depth": LaunchConfiguration("max_depth"),
-            "side_k": LaunchConfiguration("side_k")
+            "side_k": LaunchConfiguration("side_k"),
+            "back_dist_threshold": LaunchConfiguration("back_dist_threshold")
         }]
     )
 
@@ -56,6 +57,36 @@ def generate_launch_description():
         actions=[traffic_light_node]
     )
 
+    distance_node = Node(
+        package=pkg_name,
+        executable="distance_node",
+        name="distance_node",
+        parameters=[{
+            "lidar_angle_view": LaunchConfiguration("lidar_angle_view"),
+            "max_lidar_dist": LaunchConfiguration("max_lidar_dist"),
+            "min_lidar_dist": LaunchConfiguration("min_lidar_dist")
+        }]
+    )
+
+    delayed_distance_node = TimerAction(
+        period=1.0,
+        actions=[distance_node]
+    )
+
+    intersection_detector = Node(
+        package=pkg_name,
+        executable="intersection_detector",
+        name="intersection_detector",
+        parameters=[{
+            "front_dist_threshold": LaunchConfiguration("front_dist_threshold")
+        }]
+    )
+
+    delayed_intersection_detector = TimerAction(
+        period=1.0,
+        actions=[intersection_detector]
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument("c_p", default_value="2.0",
                               description="P coefficient in center PID"),
@@ -75,13 +106,25 @@ def generate_launch_description():
                               description="Error limit for turn PID regularization"),
         DeclareLaunchArgument("yaw_threshold", default_value="5.0",
                               description="Yaw threshold in degrees for turning task"),
-        DeclareLaunchArgument("max_depth", default_value="0.7",
+        DeclareLaunchArgument("max_depth", default_value="0.6",
                               description="Max depth fpr depth camera"),
-        DeclareLaunchArgument("side_k", default_value="1.4",
+        DeclareLaunchArgument("side_k", default_value="2.0",
                               description="Coef for x-priority"),
         DeclareLaunchArgument("green_threshold", default_value="500",
                               description="Num of pixels for green light detection"),
+        DeclareLaunchArgument("lidar_angle_view", default_value="20.0",
+                              description="Lidar view in degrees"),
+        DeclareLaunchArgument("max_lidar_dist", default_value="2.0",
+                              description="Max lidar distance"),
+        DeclareLaunchArgument("min_lidar_dist", default_value="0.05",
+                              description="Min lidar distance"),
+        DeclareLaunchArgument("front_dist_threshold", default_value="0.8",
+                              description="Treshold for turn sign"),
+        DeclareLaunchArgument("back_dist_threshold", default_value="1.4",
+                              description="Treshold for intersection exit"),
         road_vision_node,
         delayed_motion_controller,
-        delayed_traffic_light_node
+        delayed_traffic_light_node,
+        delayed_distance_node,
+        delayed_intersection_detector
     ])
